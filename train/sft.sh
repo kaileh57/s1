@@ -1,41 +1,40 @@
-# Reference Running: bash train/sft.sh
-# {'train_runtime': 5268.8407, 'train_samples_per_second': 0.949, 'train_steps_per_second': 0.119, 'train_loss': 0.1172730620391667, 'epoch': 5.0}
+#!/bin/bash
 uid="$(date +%Y%m%d_%H%M%S)"
-base_model="Qwen/Qwen2.5-32B-Instruct"
+base_model="google/gemma-3-12b-it"
 lr=1e-5
 min_lr=0
-epochs=5
-weight_decay=1e-4 # -> the same training pipe as slurm_training
-micro_batch_size=1 # -> batch_size will be 16 if 16 gpus
-gradient_accumulation_steps=1 # requires more GPU memory
+epochs=3
+weight_decay=1e-4
+micro_batch_size=1
+gradient_accumulation_steps=1
 max_steps=-1
 gpu_count=$(nvidia-smi -L | wc -l)
-push_to_hub=false
+push_to_hub=true
 
 torchrun --nproc-per-node ${gpu_count} --master_port 12345 \
     train/sft.py \
-    --block_size=32768 \
+    --block_size=16384 \
     --per_device_train_batch_size=${micro_batch_size} \
     --per_device_eval_batch_size=${micro_batch_size} \
     --gradient_accumulation_steps=${gradient_accumulation_steps} \
     --num_train_epochs=${epochs} \
-    --train_file_path="simplescaling/s1K_tokenized" \
+    --train_file_path="Sculptor-AI/s1K-claude-gemma-tokenized" \
     --model_name=${base_model} \
     --warmup_ratio=0.05 \
     --fsdp="full_shard auto_wrap" \
-    --fsdp_config="train/fsdp_config_qwen.json" \
+    --fsdp_config="train/fsdp_config_gemma.json" \
     --bf16=True \
-    --eval_strategy="no" \
+    --eval_strategy="steps" \
+    --eval_steps=50 \
     --logging_steps=1 \
-    --save_strategy="no" \
+    --save_steps=100 \
     --lr_scheduler_type="cosine" \
     --learning_rate=${lr} \
     --weight_decay=${weight_decay} \
     --adam_beta1=0.9 \
     --adam_beta2=0.95 \
-    --output_dir="ckpts/s1-${uid}" \
+    --output_dir="ckpts/gemma-claude-s1-${uid}" \
+    --hub_model_id="Sculptor-AI/gemma-3-12b-claude-s1" \
     --push_to_hub=${push_to_hub} \
-    --save_only_model=True
-    # --gradient_checkpointing=True \ Enable gradient checkpointing for efficient memory usage with 8 H100 GPUs.
-    # --accelerator_config='{"gradient_accumulation_kwargs": {"sync_each_batch": true}}'
-
+    --save_only_model=True \
+    --gradient_checkpointing=True

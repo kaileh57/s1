@@ -11,11 +11,14 @@ import trl
 
 @dataclass
 class TrainingConfig:
-    model_name: str = field(default="Qwen/Qwen2.5-32B-Instruct")
-    block_size: int = field(default=32768)
-    wandb_project: Optional[str] = field(default="s1")
-    wandb_entity: Optional[str] = field(default="hashimoto-group")
-    train_file_path: Optional[str] = field(default='simplescaling/s1K_tokenized')
+    # Changed model to Gemma 3 12B
+    model_name: str = field(default="google/gemma-3-12b-it")
+    block_size: int = field(default=16384)
+    # Update for your organization
+    wandb_project: Optional[str] = field(default="gemma-claude-s1")
+    wandb_entity: Optional[str] = field(default="sculptor-ai") 
+    # Update for your tokenized dataset
+    train_file_path: Optional[str] = field(default='Sculptor-AI/s1K-claude-gemma-tokenized')
     dagger: bool = field(default=False)
 
     def __post_init__(self):
@@ -29,35 +32,28 @@ def train():
     log_config = {**asdict(config), **asdict(args)}
     logging.info(f"Training config: {log_config}")
 
-    # loading model
-    kwargs = {}
-    if "70B" in config.model_name:
-        # Removed "low_cpu_mem_usage": True, for 70B, since by default we are in FSDP,
-        # it's more efficient to do  "cpu_ram_efficient_loading": true, in fsdp_config.json
-        kwargs = {"device_map": "auto", "torch_dtype": "auto",
-                  "attn_implementation": "flash_attention_2", "use_cache": False}
-        model = transformers.AutoModelForCausalLM.from_pretrained(config.model_name, **kwargs)
-    else:
-        model = transformers.AutoModelForCausalLM.from_pretrained(config.model_name)
+    # loading model - adjusted for Gemma 3
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        config.model_name,
+        device_map="auto", 
+        torch_dtype="auto",
+        attn_implementation="flash_attention_2", 
+        use_cache=False
+    )
 
     dataset = load_dataset(config.train_file_path)
 
-    # setting up trainer
+    # setting up trainer with Gemma tokenizer
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.model_name, use_fast=True)
-    if "Llama" in config.model_name:
-        instruction_template = "<|start_header_id|>user<|end_header_id|>"
-        response_template = "<|start_header_id|>assistant<|end_header_id|>\n\n"
-        # Use a token that is never used
-        tokenizer.pad_token = "<|reserved_special_token_5|>"
-    elif "Qwen" in config.model_name:
-        instruction_template = "<|im_start|>user"
-        response_template = "<|im_start|>assistant\n"
-        # Use a token that is never used
-        tokenizer.pad_token = "<|fim_pad|>"
+    
+    # Update for Gemma chat format 
+    instruction_template = "<start_of_turn>user"
+    response_template = "<start_of_turn>model"
+    
+    # Use a token that is in Gemma vocabulary
+    tokenizer.pad_token = "</s>"
 
     # Only compute loss over assistant responses
-    # Verified that it precisely starts where the thinking tokens start and ends with the first pad token
-    # via labels being set to -100
     collator = trl.DataCollatorForCompletionOnlyLM(
         instruction_template=instruction_template,
         response_template=response_template,

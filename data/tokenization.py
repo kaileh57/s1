@@ -4,33 +4,30 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 from functools import partial
 
-QUERY_TEMPLATE_NOANSWER = """{Question}""".strip()
-
 def preprocess(text):
     if text is None:
         return " "
     text = text.strip()
-    text = text.replace(" [title]", ". ")
-    text = re.sub("\\[.*?\\]", "", text)
-    text = text.replace("  ", " ")
     return text
 
-def process_cot_example(
+def process_claude_example(
     example: Dict,
     tokenizer,
 ):
-    thinking_trajectory = example["thinking_trajectories"]
+    # Use Claude thinking trajectory instead of Gemini's
+    thinking_trajectory = example["claude_thinking_trajectory"]
     question = example["question"]
-    answer = example["attempt"] 
-    prompt = QUERY_TEMPLATE_NOANSWER.format(Question=question)
-    answer = "Answer: " + answer if "Answer:" not in answer else answer
+    answer = example["claude_attempt"] 
+    
+    # Use Claude-style <think> tags
     text = tokenizer.apply_chat_template([
-        {"role": "user", "content": prompt},
+        {"role": "user", "content": question},
         {
             "role": "assistant", 
-            "content": "<|im_start|>think\n" + "\n".join(thinking_trajectory).strip() + "\n<|im_start|>answer\n" + answer.strip()
+            "content": f"<think>{thinking_trajectory}</think>{answer.strip()}"
         }
     ], tokenize=False)
+    
     return dict(text=text)
 
 def mathcot_sft(upload_data_path: str, num_proc: int,
@@ -39,16 +36,36 @@ def mathcot_sft(upload_data_path: str, num_proc: int,
     dataset = load_dataset(download_data_path, download_mode='force_redownload')
     if 'train' in dataset:
         dataset = dataset['train']
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-32B-Instruct")
-    process_example_map = partial(process_cot_example, tokenizer=tokenizer)
-    dataset = dataset.map(
+    
+    # Use Gemma tokenizer instead of Qwen
+    tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-12b-it")
+    process_example_map = partial(process_claude_example, tokenizer=tokenizer)
+    
+    # Create train/test split for evaluation
+    split_dataset = dataset.train_test_split(test_size=0.1)
+    
+    train_tokenized = split_dataset["train"].map(
         process_example_map,
         num_proc=num_proc,
-        desc="Tokenizing SFT data",
+        desc="Tokenizing training data",
     )
-    dataset.push_to_hub(upload_data_path)
+    
+    test_tokenized = split_dataset["test"].map(
+        process_example_map,
+        num_proc=num_proc,
+        desc="Tokenizing test data",
+    )
+    
+    # Combine into a DatasetDict
+    from datasets import DatasetDict
+    final_dataset = DatasetDict({
+        "train": train_tokenized,
+        "test": test_tokenized
+    })
+    
+    final_dataset.push_to_hub(upload_data_path)
 
 if __name__ == "__main__":
-    mathcot_sft(download_data_path="simplescaling/s1K",
-                upload_data_path="simplescaling/s1K_tokenized", 
-                num_proc=20)
+    mathcot_sft(download_data_path="simplescaling/s1K-claude-3-7-sonnet",
+                upload_data_path="Sculptor-AI/s1K-claude-gemma-tokenized", 
+                num_proc=8)
